@@ -1,0 +1,378 @@
+#include <RcppArmadillo.h>
+#include <iostream>
+#include <limits>
+using namespace arma;
+using namespace Rcpp;
+
+// [[Rcpp::depends(RcppArmadillo)]]
+
+
+// [[Rcpp::export]]
+double rtruncnorm1(double mean, double sd, double lower, double upper) 
+{
+  double value;
+  
+  do {
+    value = R::rnorm(mean, sd);
+  } while (value < lower || value > upper);
+  return value;
+}
+
+
+
+
+std::vector<double> rdirichlet1(const std::vector<double>& alpha) 
+{  
+  std::vector<double> gamma_samples(alpha.size());  
+  // Gamma sample
+  for (size_t i = 0; i < alpha.size(); ++i) 
+  {
+    gamma_samples[i] = R::rgamma(alpha[i], 1.0);
+  }
+  
+  // Dirichlet sample
+  double sum = std::accumulate(gamma_samples.begin(), gamma_samples.end(), 0.0);
+  for (size_t i = 0; i < gamma_samples.size(); ++i) 
+  {
+    gamma_samples[i] /= sum;
+  }
+  
+  return gamma_samples;
+}
+
+
+
+
+
+// 将arma::mat转换为std::vector<double>
+std::vector<double> matToVector(const arma::mat& matrix) {
+  std::vector<double> result;
+  
+  // 获取矩阵的行数和列数
+  size_t numRows = matrix.n_rows;
+  size_t numCols = matrix.n_cols;
+  
+  // 遍历矩阵的每个元素，并添加到向量中
+  for (size_t i = 0; i < numRows; ++i) {
+    for (size_t j = 0; j < numCols; ++j) {
+      result.push_back(matrix(i, j));
+    }
+  }
+  
+  return result;
+}
+
+
+double dtruncnorm1(double x, double mean, double sd, double lower, double upper) {
+  double zLower = (lower - mean) / sd;
+  double zUpper = (upper - mean) / sd;
+  
+  if (zLower >= zUpper) {
+    // Invalid range, return NaN
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  
+  double cdfLower = R::pnorm(zLower, 0, 1, 1, 0);
+  double cdfUpper = R::pnorm(zUpper, 0, 1, 1, 0);
+  
+  double pdf = R::dnorm(x, mean, sd, 0) / (cdfUpper - cdfLower);
+  
+  return pdf;
+}
+
+
+double findMin(double a, double b) 
+{
+  return (a < b) ? a : b;
+}
+
+
+
+double rbeta1(double alpha, double beta) {
+  
+  double x = R::rgamma(alpha, 1.0);
+  double y = R::rgamma(beta, 1.0);
+  
+  //  Beta sample
+  return x / (x + y);
+}
+
+
+
+
+arma::mat getSubCol(const arma::mat& matrix, int colIndex) {
+  
+  // colIndex -= 1;
+  
+  return matrix.cols(find(arma::linspace(0, matrix.n_cols - 1, matrix.n_cols) != colIndex));
+}
+
+
+
+
+
+arma::mat f_Theta_c_y(arma::mat A,arma::mat B_gibbs,arma::mat Tau,arma::mat Y,int Mj)
+{ 
+  int n=Y.n_rows; int J=B_gibbs.n_rows; int K=B_gibbs.n_cols-1;
+  double tu; //double Inf = std::numeric_limits<double>::infinity();
+  arma::mat C=A*(arma::trans(B_gibbs)) ; arma::mat Theta_c_y(n,pow(2,K));
+  arma::cube  Theta_gibbs(J,pow(2,K),Mj);
+  
+  
+  for(int i=0;i<J;++i)
+  { for(int j=0;j<pow(2,K);++j)
+  { for(int l=0;l<Mj;++l) 
+  { Theta_gibbs(i,j,l)=R::pnorm(Tau(l+1,0)-C(j,i),0.0,1.0,1,0)-R::pnorm(Tau(l,0)-C(j,i),0.0,1.0,1,0);}
+  }
+  }
+  
+  for(int i=0;i<n;++i)
+  { for(int j=0;j<pow(2,K);++j)
+  {tu=0;
+    for(int l=0;l<J;++l )
+      {  if(Theta_gibbs(l,j,Y(i,l))==0) {tu=tu-720;}
+      else  {tu=tu+log(Theta_gibbs(l,j,Y(i,l)));}
+      }
+    Theta_c_y(i,j)=tu;}
+  }
+  return(Theta_c_y);
+}
+
+
+
+// [[Rcpp::export]]
+Rcpp::List f_alp_Ystar_pi(arma::mat N_gibbs,arma::vec alpha_gibbs,arma::mat a_gibbs,arma::mat A,arma::mat B_gibbs,arma::mat Tau,arma::mat Y,int Mj)
+{
+  int n=Y.n_rows;int J=B_gibbs.n_rows;int K=B_gibbs.n_cols-1;
+  double con;
+  arma::vec Probab(pow(2,K)); arma::vec pi_gibbs(pow(2,K)); arma::vec x=arma::regspace(0, 1, pow(2,K)-1);
+  arma::mat Theta_c_y(n,pow(2,K)); arma::mat Y_star_gibbs(n,J);
+  arma::mat P_Y(n,J);
+  
+  //arma::mat  Probab_trace(pow(2,K),n);
+  Theta_c_y=f_Theta_c_y(A,B_gibbs,Tau,Y,Mj);
+  
+  for(int i=0;i<n;++i) //#gibbs sampling for a_gibbs
+  {
+    {
+      N_gibbs(0,alpha_gibbs(i))=N_gibbs(0,alpha_gibbs(i))-1;
+      for(int l=0;l<pow(2,K);++l)
+      {Probab(l)=log(N_gibbs(0,l)+1)+Theta_c_y(i,l); 
+        //Rcpp:cout<<Probab(l)<<std::endl;
+      }
+      con=min(Probab);
+      Probab=exp(Probab-con-log(sum(exp(Probab-con))));
+      //  Probab_trace.col(i)=Probab;
+      
+      Rcpp::Function sampleFunc("sample");
+      Rcpp::NumericVector sampled = sampleFunc(x, 1, Rcpp::Named("replace", false),Probab);  // Convert R vector back to Armadillo vector
+      
+      alpha_gibbs(i)=sampled(0);
+      N_gibbs(0,alpha_gibbs(i))=N_gibbs(0,alpha_gibbs(i))+1;a_gibbs.row(i)=A.row(alpha_gibbs(i));
+    }
+    
+    //#gibbs sampling for a_gibbs 
+    
+    for(int j=0;j<J;++j)
+    { 
+      //P_Y(i,j) = Theta_c_y(j,alpha_gibbs(i),Y(i,j));
+      arma::mat aB_gibbs=a_gibbs.row(i)*trans(B_gibbs.row(j));
+      Y_star_gibbs(i,j)=rtruncnorm1(aB_gibbs(0,0),1.0,Tau(Y(i,j),0),Tau(Y(i,j)+1,0));
+    }
+  }// sampling Y_star_gibbs
+  
+  
+  {//step2:formula comes from page 460(11) in paper "Bayesian Estimation of the DINA Model With Gibbs Sampling"
+    arma::mat N1=N_gibbs+ones(1,pow(2,K));
+    std::vector<double> result1 = matToVector(N1);
+    pi_gibbs=rdirichlet1(result1);    //pi_gibbs_trace[,r]=pi_gibbs
+    
+  }
+  
+  arma::vec result = prod(P_Y, 1); 
+  return Rcpp::List::create(Rcpp::Named("N_gibbs") = N_gibbs,
+                            Rcpp::Named("alpha_gibbs") = alpha_gibbs ,
+                            Rcpp::Named("a_gibbs") = a_gibbs,
+                            Rcpp::Named("Y_star_gibbs")=Y_star_gibbs,
+                            Rcpp::Named("pi_gibbs")=pi_gibbs,
+                            Rcpp::Named("result")=P_Y
+  );
+  
+}
+
+
+
+// [[Rcpp::export]]
+Rcpp::List f_Q_Beta_omega(arma::mat a_gibbs,arma::mat B_gibbs,arma::mat Y_star_gibbs,int c1,int c0,double omega,arma::mat V,arma::mat Q_MH,arma::mat Q_qta)
+{
+  int J=B_gibbs.n_rows;int K=B_gibbs.n_cols-1;
+  double Tran1,Tran2,random,Trans,sigma,u;double Inf = std::numeric_limits<double>::infinity();
+  arma::mat D=arma::trans(a_gibbs)*a_gibbs; 
+  
+  // Rcpp::Function runif("runif");
+  {//#step3:formula
+    for(int j=0;j<J;++j)
+    { for(int k=0;k<K;++k)
+    { 
+      Tran1=dtruncnorm1(B_gibbs(j,k+1),0.0,sqrt(1/c1),0.0,Inf);
+      Tran2=dtruncnorm1(B_gibbs(j,k+1),0.0,sqrt(1.0/c0),0.0,Inf);  
+      
+      Trans=Tran2/Tran1*(1-omega)/omega;
+      
+      arma::vec random_vector = Rcpp::as<arma::vec>(Rcpp::runif(1, 0.0, 1.0));
+      random=random_vector(0);
+      
+      if( random<findMin( 1.0,pow(Trans,(2*Q_MH(j,k)-1) ) ) ) //#condition for accepting transformation
+      {Q_MH(j,k)=1-Q_MH(j,k); //#transformation
+        Q_qta(j,k+1)=Q_MH(j,k);//#calculating the value of Q_qta after transformation
+        V=Q_qta/c1+(1-Q_qta)/c0; }//#calculating the value of V after transformation
+      
+      // Q_MH_trace[j,k,r]=Q_MH[j,k] #record the value of Q_MH
+    }
+    
+    for(int l=0;l<(K+1);++l)
+    { sigma=1/(D(l,l)+1/V(j,l));
+      arma::mat u1=arma::trans(a_gibbs.col(l))*(Y_star_gibbs.col(j)-getSubCol(a_gibbs,l)*arma::trans(getSubCol(B_gibbs.row(j),l)));
+      u=u1(0,0);
+      if(l==0) {B_gibbs(j,l)=(rnorm(1,sigma*u,sqrt(sigma)))(0);}
+      else {B_gibbs(j,l)=rtruncnorm1(sigma*u,sqrt(sigma),0.0,Inf) ;}
+    } 
+    }
+  }
+  { omega=rbeta1(accu(Q_MH)+1,J*K-accu(Q_MH)+1) ;}  
+  return Rcpp::List::create(Rcpp::Named("Q_MH") = Q_MH,
+                            Rcpp::Named("Q_qta") = Q_qta ,
+                            Rcpp::Named("B_gibbs") = B_gibbs,
+                            Rcpp::Named("V")=V,
+                            Rcpp::Named("omega")=omega
+                              
+  );
+}
+
+
+
+arma::cube f_Thres(arma::mat A,arma::mat B_i,arma::mat Tau,arma::mat Y,arma::vec M)
+{
+  int n=Y.n_rows;
+  int J=B_i.n_rows; 
+  int K=B_i.n_cols-1;
+  
+  arma:mat p_gA = A*(arma::trans(B_i)) ;
+  arma::cube Thres(J,pow(2,K),max(M));
+  for(int j=0;j<J;j++)
+    for(int c=0;c<pow(2,K);c++)
+      for(int m=0;m<M(j);m++)
+      {
+        Thres(j,c,m) = R::pnorm(Tau(j,m+1)-p_gA(c,j),0.0,1.0,1,0)-R::pnorm(Tau(j,m)-p_gA(c,j),0.0,1.0,1,0);
+      }
+      return Thres;
+}
+
+
+Rcpp::List BIC_y(mat Y, vec i_cate_a, mat A,
+                    mat B_i,vec M_y,mat tau_y)
+{
+  int n=Y.n_rows;
+  int J_y=B_i.n_rows;
+  
+  int m_y = max(M_y);
+  
+  int K_y = A.n_cols-1;
+  arma::cube Thres_y(n,pow(2,K_y),m_y); 
+  //Rcout<<tau_y<<std::endl;
+  Thres_y = f_Thres(A,B_i,tau_y,Y,M_y);
+  arma::mat P_Y(n,J_y);
+  
+  
+  for(int i=0;i<n;i++)
+  {
+    for(int j=0;j<J_y;j++)
+    {
+     
+      P_Y(i,j) = Thres_y(j,i_cate_a(i),Y(i,j));
+    }
+    
+    
+    
+    
+  }
+  
+  // 按行累乘 
+  arma::vec result = prod(P_Y, 1);
+  
+  
+  return Rcpp::List::create(Named("P_Y")=result);
+  
+}
+
+
+// [[Rcpp::export]]
+Rcpp::List f_mcmc(arma::mat N_gibbs,arma::vec alpha_gibbs,arma::mat A,arma::mat Tau,arma::mat Y,int Mj,arma::mat a_gibbs,arma::mat B_gibbs,int c1,int c0,double omega,arma::mat V,arma::mat Q_MH,arma::mat Q_qta,int iteration)
+{   int n=Y.n_rows;int J=B_gibbs.n_rows;int K=B_gibbs.n_cols-1;
+arma::vec pi_gibbs(pow(2,K));arma::mat Y_star_gibbs(n,J);
+arma::mat pi_gibbs_trace(pow(2,K),iteration);
+arma::mat alpha_gibbs_trace(n,iteration);
+arma::cube Q_MH_trace(J,K,iteration),B_gibbs_trace(J,K+1,iteration);
+arma::mat P_Y(n,iteration);
+
+for(int r=0;r<iteration;++r)
+{
+  Rcpp:: List step1=f_alp_Ystar_pi(N_gibbs,alpha_gibbs,a_gibbs,A,B_gibbs,Tau,Y, Mj);
+  
+  arma::mat N_gibbs_temp=step1[0];
+  arma::vec alpha_gibbs_temp=step1[1];
+  arma::mat a_gibbs_temp=step1[2];
+  arma::mat Y_star_gibbs_temp=step1[3];
+  arma::vec pi_gibbs_temp=step1[4];
+  
+  //P_Y.col(r)=step1[5];
+  
+  N_gibbs=N_gibbs_temp;
+  alpha_gibbs=alpha_gibbs_temp;
+  a_gibbs=a_gibbs_temp;
+  Y_star_gibbs=Y_star_gibbs_temp;
+  pi_gibbs=pi_gibbs_temp;
+  
+  pi_gibbs_trace.col(r)=pi_gibbs;
+  alpha_gibbs_trace.col(r)=alpha_gibbs;
+  
+  Rcpp::List step2= f_Q_Beta_omega(a_gibbs,B_gibbs,Y_star_gibbs,c1,c0, omega,V,Q_MH,Q_qta);
+  
+  arma::mat Q_MH_temp=step2[0];
+  arma::mat Q_qta_temp=step2[1];
+  arma::mat B_gibbs_temp=step2[2];
+  arma::mat V_temp=step2[3];
+  double omega_temp=step2[4];
+  
+  Q_MH=Q_MH_temp;
+  Q_qta=Q_qta_temp;
+  B_gibbs=B_gibbs_temp;
+  V=V_temp;
+  omega=omega_temp;
+  B_gibbs_trace.slice(r)=B_gibbs;
+  Q_MH_trace.slice(r)=Q_MH;
+  
+  
+  arma::vec M_j = arma::ones<arma::vec>(J) * Mj;
+  arma::rowvec Tau_row = Tau.t();
+  arma::mat Tau_mat = arma::repmat(Tau_row, J, 1);
+  Rcpp::List step3 = BIC_y(Y,alpha_gibbs,A,B_gibbs,M_j,Tau_mat);
+  P_Y.col(r) = Rcpp::as<arma::vec>(step3[0]);
+  
+  
+  Rcpp::Rcout << r << std::endl;
+  
+  
+  
+}
+
+
+return Rcpp::List::create(  Rcpp::Named("pi_gibbs_trace")=pi_gibbs_trace,
+                            Rcpp::Named("Q_MH_trace")=Q_MH_trace,
+                            Rcpp::Named("B_gibbs_trace")=B_gibbs_trace,
+                            Rcpp::Named("alpha_gibbs_trace")=alpha_gibbs_trace,
+                            Rcpp::Named("P_Y") = P_Y
+);
+
+}
+
