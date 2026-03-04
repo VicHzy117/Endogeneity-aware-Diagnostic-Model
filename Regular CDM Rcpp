@@ -44,15 +44,15 @@ std::vector<double> rdirichlet1(const std::vector<double>& alpha)
 
 
 
-// 将arma::mat转换为std::vector<double>
+// arma::mat into std::vector<double>
 std::vector<double> matToVector(const arma::mat& matrix) {
   std::vector<double> result;
   
-  // 获取矩阵的行数和列数
+
   size_t numRows = matrix.n_rows;
   size_t numCols = matrix.n_cols;
   
-  // 遍历矩阵的每个元素，并添加到向量中
+  // 
   for (size_t i = 0; i < numRows; ++i) {
     for (size_t j = 0; j < numCols; ++j) {
       result.push_back(matrix(i, j));
