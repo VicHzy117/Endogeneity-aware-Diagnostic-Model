@@ -1,0 +1,4 @@
+"scenario_id","replicate_id","n","J","K","continuous_trace","q_trace","q_running_mean"
+6,50,2000,72,2,"output/traceplots/scenario_06_n2000_J72_K2_rep050_continuous_trace.pdf","output/traceplots/scenario_06_n2000_J72_K2_rep050_q_trace.pdf","output/traceplots/scenario_06_n2000_J72_K2_rep050_q_running_mean.pdf"
+11,50,1000,72,3,"output/traceplots/scenario_11_n1000_J72_K3_rep050_continuous_trace.pdf","output/traceplots/scenario_11_n1000_J72_K3_rep050_q_trace.pdf","output/traceplots/scenario_11_n1000_J72_K3_rep050_q_running_mean.pdf"
+13,50,500,48,4,"output/traceplots/scenario_13_n500_J48_K4_rep050_continuous_trace.pdf","output/traceplots/scenario_13_n500_J48_K4_rep050_q_trace.pdf","output/traceplots/scenario_13_n500_J48_K4_rep050_q_running_mean.pdf"

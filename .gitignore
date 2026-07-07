@@ -1,0 +1,33 @@
+# macOS
+.DS_Store
+
+# R session / history
+.Rhistory
+.RData
+.Ruserdata
+
+# Large generated objects
+*.rds
+*.RData
+*.RDataTmp
+
+# Logs
+log/
+logs/
+*.log
+slurm-*.out
+*.out
+*.err
+
+# Generated large result folders
+**/result/fits/
+**/result/bic_fits/
+**/result/eacdm/
+**/result/conventional_cdm/
+**/output/chains/
+
+# Keep placeholders if present
+!**/.gitkeep
+
+# Local plotting scratch
+Rplots.pdf

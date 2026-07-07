@@ -1,0 +1,271 @@
+library(Rcpp)
+library(RcppArmadillo)
+
+# Locate this script and compile the C++ sampler next to it. This keeps the
+# project portable and avoids hard-coded local machine paths.
+cmd_file <- grep("^--file=", commandArgs(FALSE), value = TRUE)
+script_arg <- if (length(cmd_file)) gsub("~\\+~", " ", sub("^--file=", "", cmd_file[[1]])) else NA_character_
+this_file <- if (!is.na(script_arg)) normalizePath(script_arg) else NA_character_
+if (is.na(this_file)) {
+  this_file <- tryCatch(normalizePath(sys.frame(1)$ofile), error = function(e) NA_character_)
+}
+script_dir <- if (is.na(this_file)) getwd() else dirname(this_file)
+sourceCpp(file.path(script_dir, "eacdm_mcmc.cpp"))
+
+NumResponse <- function(Y) {
+  apply(Y, 2, max) + 1L
+}
+
+make_binary_design <- function(K) {
+  states <- 0:(2^K - 1L)
+  bits <- vapply(states, function(x) as.integer(intToBits(x))[seq_len(K)], integer(K))
+  cbind(1, t(bits))
+}
+
+make_thresholds <- function(M) {
+  J <- length(M)
+  tau <- matrix(0, nrow = J, ncol = max(M) + 1L)
+  for (j in seq_len(J)) {
+    tau[j, seq_len(M[j] + 1L)] <- c(-Inf, seq_len(M[j] - 1L) - 1L, Inf)
+  }
+  tau
+}
+
+draw_initial_classes <- function(n, design) {
+  n_class <- nrow(design)
+  idx <- sample.int(n_class, n, replace = TRUE) - 1L
+  counts <- tabulate(idx + 1L, nbins = n_class)
+  list(index = idx, counts = counts, design_rows = design[idx + 1L, , drop = FALSE])
+}
+
+ECDM_main <- function(Y, V, covarites, K_a, K_g, iteration,
+                      verbose_every = 1000L,
+                      keep_categories = FALSE,
+                      keep_loglik = TRUE) {
+  n <- nrow(Y)
+  J_y <- ncol(Y)
+  J_v <- ncol(V)
+
+  # Build the latent class design matrices and ordinal thresholds once.
+  M_y <- NumResponse(Y)
+  M_v <- NumResponse(V)
+  A <- make_binary_design(K_a)
+  G <- make_binary_design(K_g)
+  thres_y <- make_thresholds(M_y)
+  thres_v <- make_thresholds(M_v)
+
+  c1 <- 1L
+  c0 <- 500L
+
+  # Initial item parameters and Q matrices for the Y block.
+  B_i <- matrix(0, J_y, K_a + 1L)
+  Q_MH_1 <- matrix(0, J_y, K_a)
+  Q_qta_1 <- cbind(1, matrix(0, J_y, K_a))
+  omega1 <- 0.4
+  VQ_1 <- Q_qta_1 / c1 + (1 - Q_qta_1) / c0
+
+  # Initial item parameters and Q matrices for the V block.
+  L_i <- matrix(0, J_v, K_g + 1L)
+  Q_MH_2 <- matrix(0, J_v, K_g)
+  Q_qta_2 <- cbind(1, matrix(0, J_v, K_g))
+  omega2 <- 0.4
+  VQ_2 <- Q_qta_2 / c1 + (1 - Q_qta_2) / c0
+
+  init_a <- draw_initial_classes(n, A)
+  i_c_a <- init_a$index
+  n_cate_a <- init_a$counts
+  A_cate <- init_a$design_rows
+  pi_a <- rep(1 / nrow(A), nrow(A))
+
+  init_g <- draw_initial_classes(n, G)
+  i_c_g <- init_g$index
+  n_cate_g <- init_g$counts
+  G_cate <- init_g$design_rows
+  pi_g <- rep(1 / nrow(G), nrow(G))
+  G_catecov <- cbind(G_cate, covarites)
+
+  # Regression from gamma/covariates to alpha, sampled with Polya-Gamma weights.
+  Sita <- matrix(rnorm(ncol(G_catecov) * K_a, 0.01, 1), ncol(G_catecov), K_a)
+  Means_prior <- matrix(0, nrow(Sita), K_a)
+  Cov_prior <- array(0, c(nrow(Sita), nrow(Sita), K_a))
+  for (k in seq_len(K_a)) Cov_prior[, , k] <- diag(nrow(Sita))
+  W <- matrix(0.5, K_a, n)
+
+  # Preallocate storage. This is much faster than repeatedly growing lists.
+  Q1_list <- vector("list", iteration + 1L)
+  Q2_list <- vector("list", iteration + 1L)
+  B_list <- vector("list", iteration + 1L)
+  L_list <- vector("list", iteration + 1L)
+  Sita_list <- vector("list", iteration + 1L)
+  Q1_list[[1]] <- Q_MH_1
+  Q2_list[[1]] <- Q_MH_2
+  B_list[[1]] <- B_i
+  L_list[[1]] <- L_i
+  Sita_list[[1]] <- Sita
+
+  if (keep_categories) {
+    i_a_list <- vector("list", iteration + 1L)
+    i_g_list <- vector("list", iteration + 1L)
+    i_a_list[[1]] <- i_c_a
+    i_g_list[[1]] <- i_c_g
+  }
+
+  P_YVber <- if (keep_loglik) matrix(0, n, iteration) else NULL
+
+  for (iter in seq_len(iteration)) {
+    if (verbose_every > 0L && iter %% verbose_every == 0L) message("iteration ", iter)
+
+    # 1. Sample alpha class and latent normal Y*.
+    y_step <- f_alp_Ystar_pi(
+      n_cate_a, i_c_a, A_cate, A, B_i, thres_y, Y, M_y, Sita, G_cate, G_catecov
+    )
+    n_cate_a <- y_step$n_cate
+    i_c_a <- y_step$i_cate
+    A_cate <- y_step$A_cate
+    Y_star_new <- y_step$Y_star_gibbs
+    pi_a <- y_step$pi_gibbs
+
+    # 2. Sample gamma class and latent normal V*.
+    v_step <- f_gam_Vstar_pi(
+      n_cate_g, i_c_g, G_cate, G, L_i, thres_v, V, M_v, Sita,
+      A_cate, covarites, G_catecov
+    )
+    n_cate_g <- v_step$n_cate
+    i_c_g <- v_step$i_cate
+    G_cate <- v_step$G_cate
+    V_star_new <- v_step$V_star_gibbs
+    pi_g <- v_step$pi_gibbs
+    G_catecov <- cbind(G_cate, covarites)
+
+    # 3. Update Sita using Polya-Gamma augmentation.
+    sita_step <- f_Sitacoef_w(A_cate, W, G_cate, Sita, Means_prior, Cov_prior, G_catecov)
+    W <- sita_step$W
+    Sita <- sita_step$Sita
+
+    # 4. Update Q/Beta for the Y block.
+    q1_step <- f_Q_Beta_omega(A_cate, B_i, Y_star_new, c1, c0, omega1, VQ_1, Q_MH_1, Q_qta_1)
+    Q_MH_1 <- q1_step$Q_MH
+    Q_qta_1 <- q1_step$Q_qta
+    B_i <- q1_step$B_i
+    VQ_1 <- q1_step$V_Q
+    omega1 <- q1_step$omega
+
+    # 5. Update Q/Beta for the V block.
+    q2_step <- f_Q_Beta_omega(G_cate, L_i, V_star_new, c1, c0, omega2, VQ_2, Q_MH_2, Q_qta_2)
+    Q_MH_2 <- q2_step$Q_MH
+    Q_qta_2 <- q2_step$Q_qta
+    L_i <- q2_step$B_i
+    VQ_2 <- q2_step$V_Q
+    omega2 <- q2_step$omega
+
+    Q1_list[[iter + 1L]] <- Q_MH_1
+    Q2_list[[iter + 1L]] <- Q_MH_2
+    B_list[[iter + 1L]] <- B_i
+    L_list[[iter + 1L]] <- L_i
+    Sita_list[[iter + 1L]] <- Sita
+    if (keep_categories) {
+      i_a_list[[iter + 1L]] <- i_c_a
+      i_g_list[[iter + 1L]] <- i_c_g
+    }
+
+    if (keep_loglik) {
+      waic <- WAIC_y_v(Y, V, i_c_a, i_c_g, A, G, B_i, L_i, M_y, M_v,
+                       thres_y, thres_v, Sita, G_catecov, A_cate)
+      P_YVber[, iter] <- waic$P_YVber
+    }
+  }
+
+  out <- list(
+    Q1_list = Q1_list,
+    Q2_list = Q2_list,
+    B_list = B_list,
+    L_list = L_list,
+    Sita_list = Sita_list,
+    P_YVber = P_YVber,
+    final = list(pi_a = pi_a, pi_g = pi_g, A = A, G = G)
+  )
+  if (keep_categories) {
+    out$i_a_list <- i_a_list
+    out$i_g_list <- i_g_list
+  }
+  out
+}
+
+PostMean <- function(Mat_afburn, burn_in) {
+  idx <- burn_in:length(Mat_afburn)
+  Reduce(`+`, Mat_afburn[idx]) / length(idx)
+}
+
+PBIC_from_result <- function(mcmc_result, Y, V, covarites, K_a, K_g, burn_in) {
+  P <- pmax(mcmc_result$P_YVber[, burn_in:ncol(mcmc_result$P_YVber), drop = FALSE], 1e-300)
+  n <- nrow(Y)
+  J_y <- ncol(Y)
+  J_v <- ncol(V)
+  penalty <- ((2 * K_a + 1) * J_y + (2 * K_g + 1) * J_v +
+                K_a * (K_g + 1 + ncol(covarites))) * log(n)
+  penalty - 2 * sum(colMeans(log(P)))
+}
+
+PlotQMatrix <- function(Q,
+                        threshold = 0.5,
+                        title = "Estimated Q-matrix",
+                        xlab = "Latent Attributes",
+                        ylab = "Question Numbers",
+                        save_path = NULL,
+                        width = 8,
+                        height = 4.5,
+                        pointsize = 14) {
+  Q <- as.matrix(Q)
+  if (!is.numeric(Q)) stop("Q must be a numeric matrix.")
+
+  # Posterior mean Q matrices are continuous, so threshold them before plotting.
+  Q_binary <- ifelse(Q >= threshold, 1L, 0L)
+  storage.mode(Q_binary) <- "integer"
+
+  if (!is.null(save_path)) {
+    png(save_path, width = width, height = height, units = "in", res = 300, pointsize = pointsize)
+    on.exit(dev.off(), add = TRUE)
+  }
+
+  old_par <- par(no.readonly = TRUE)
+  on.exit(par(old_par), add = TRUE)
+
+  n_item <- nrow(Q_binary)
+  n_attr <- ncol(Q_binary)
+
+  par(mar = c(4.2, 4.5, 2.2, 1.0), family = "serif")
+  plot(
+    NA,
+    xlim = c(0.5, n_attr + 0.5),
+    ylim = c(n_item + 0.5, 0.5),
+    xaxt = "n",
+    yaxt = "n",
+    xlab = xlab,
+    ylab = ylab,
+    main = title,
+    bty = "n"
+  )
+
+  # Draw the full J by K matrix area first, then fill q_jk = 1 cells in black.
+  rect(0.5, 0.5, n_attr + 0.5, n_item + 0.5, col = "white", border = "black")
+  abline(v = seq(0.5, n_attr + 0.5, by = 1), col = "grey85", lwd = 0.4)
+  abline(h = seq(0.5, n_item + 0.5, by = 1), col = "grey85", lwd = 0.4)
+
+  one_pos <- which(Q_binary == 1L, arr.ind = TRUE)
+  if (nrow(one_pos) > 0L) {
+    rect(
+      xleft = one_pos[, 2] - 0.5,
+      ybottom = one_pos[, 1] - 0.5,
+      xright = one_pos[, 2] + 0.5,
+      ytop = one_pos[, 1] + 0.5,
+      col = "black",
+      border = "black"
+    )
+  }
+
+  axis(1, at = seq_len(n_attr), labels = seq_len(n_attr), tick = FALSE)
+  axis(2, at = seq_len(n_item), labels = seq_len(n_item), las = 1, tick = FALSE)
+  box()
+
+  invisible(Q_binary)
+}
