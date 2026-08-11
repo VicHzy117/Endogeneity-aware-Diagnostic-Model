@@ -1,0 +1,15 @@
+"model","candidate","count","percent"
+"EACDM","(2,2)",0,0
+"EACDM","(3,2)",0,0
+"EACDM","(4,2)",0,0
+"EACDM","(2,3)",0,0
+"EACDM","(3,3)",100,100
+"EACDM","(4,3)",0,0
+"EACDM","(2,4)",0,0
+"EACDM","(3,4)",0,0
+"EACDM","(4,4)",0,0
+"Conventional CDM","K=2",0,0
+"Conventional CDM","K=3",0,0
+"Conventional CDM","K=4",65,65
+"Conventional CDM","K=5",33,33
+"Conventional CDM","K=6",2,2

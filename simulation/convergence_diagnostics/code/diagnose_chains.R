@@ -150,10 +150,10 @@ parameter_labels <- function(field, truth) {
     return(unlist(lapply(seq_len(K), function(k) sprintf("Q2[item=%d,attr=%d]", seq_len(J2), k))))
   }
   if (field == "B_list") {
-    return(unlist(lapply(0:K, function(k) sprintf("B1[item=%d,col=%d]", seq_len(J1), k))))
+    return(unlist(lapply(0:K, function(k) sprintf("Delta1[item=%d,col=%d]", seq_len(J1), k))))
   }
   if (field == "L_list") {
-    return(unlist(lapply(0:K, function(k) sprintf("B2[item=%d,col=%d]", seq_len(J2), k))))
+    return(unlist(lapply(0:K, function(k) sprintf("Delta2[item=%d,col=%d]", seq_len(J2), k))))
   }
   if (field == "Sita_list") {
     nr <- nrow(truth$eta)
@@ -197,10 +197,10 @@ selected_trace_parameters <- function(truth) {
       list(field = "Sita_list", row = 2L, col = 1L, label = "eta: corresponding latent effect"),
       list(field = "Sita_list", row = cross_row, col = 1L, label = "eta: cross-latent effect"),
       list(field = "Sita_list", row = K + 2L, col = 1L, label = "eta: covariate effect"),
-      list(field = "B_list", row = q1_active[1L], col = q1_active[2L] + 1L, label = "B1: active loading"),
-      list(field = "B_list", row = q1_inactive[1L], col = q1_inactive[2L] + 1L, label = "B1: inactive loading"),
-      list(field = "L_list", row = q2_active[1L], col = q2_active[2L] + 1L, label = "B2: active loading"),
-      list(field = "L_list", row = q2_inactive[1L], col = q2_inactive[2L] + 1L, label = "B2: inactive loading")
+      list(field = "B_list", row = q1_active[1L], col = q1_active[2L] + 1L, label = "Delta1: true-active coordinate"),
+      list(field = "B_list", row = q1_inactive[1L], col = q1_inactive[2L] + 1L, label = "Delta1: true-inactive coordinate"),
+      list(field = "L_list", row = q2_active[1L], col = q2_active[2L] + 1L, label = "Delta2: true-active coordinate"),
+      list(field = "L_list", row = q2_inactive[1L], col = q2_inactive[2L] + 1L, label = "Delta2: true-inactive coordinate")
     ),
     q = list(
       list(field = "Q1_list", row = q1_active[1L], col = q1_active[2L], label = "Q1: true active"),
@@ -263,8 +263,8 @@ dir.create(trace_dir, recursive = TRUE, showWarnings = FALSE)
 
 blocks <- c(
   eta = "Sita_list",
-  B1 = "B_list",
-  B2 = "L_list",
+  Delta1 = "B_list",
+  Delta2 = "L_list",
   Q1 = "Q1_list",
   Q2 = "Q2_list"
 )

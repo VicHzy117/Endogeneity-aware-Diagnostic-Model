@@ -68,7 +68,7 @@ extract_matrix <- function(draws) {
 
 extract_all_parameters <- function(chain) {
   fields <- c("B_list", "L_list", "Sita_list", "Q1_list", "Q2_list")
-  blocks <- c("B1", "B2", "eta", "Q1", "Q2")
+  blocks <- c("Delta1", "Delta2", "eta", "Q1", "Q2")
   matrices <- lapply(fields, function(field) extract_matrix(chain$fit[[field]]))
   list(
     draws = do.call(cbind, matrices),
@@ -143,8 +143,8 @@ compute_scenario <- function(chain_dir, scenario_id, checkpoints, burnin) {
 
 plot_panel <- function(result, y_limit = c(0.95, 3.7)) {
   block_colors <- c(
-    B1 = "#0072B2",
-    B2 = "#D55E00",
+    Delta1 = "#0072B2",
+    Delta2 = "#D55E00",
     eta = "#009E73",
     Q1 = "#CC79A7",
     Q2 = "#E69F00"
@@ -206,7 +206,7 @@ save_page <- function(results, K, output_stem) {
     graphics::legend(
       x = grconvertX(0.5, from = "ndc", to = "user"),
       y = grconvertY(0.015, from = "ndc", to = "user"),
-      legend = c(expression(B[1]), expression(B[2]), expression(eta), expression(Q[1]), expression(Q[2])),
+      legend = c(expression(Delta[1]), expression(Delta[2]), expression(eta), expression(Q[1]), expression(Q[2])),
       col = c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00"),
       lty = 1L,
       lwd = 2.2,
