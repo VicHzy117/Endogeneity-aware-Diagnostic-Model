@@ -1,220 +1,137 @@
-# EACDM Simulation Reproducibility Package
+# EACDM Exact-Q Simulation Reproducibility Package
 
-This repository contains the simulation code used for the EACDM manuscript and
-supplement.  The code is organized into two main parts:
+This repository contains the simulation code for the revised
+endogeneity-aware cognitive diagnosis model (EACDM). It reproduces the
+parameter-recovery, convergence-diagnostic, latent-dimension-selection, and
+conventional-CDM comparison studies reported in the manuscript and supplement.
 
-1. `simulation/`: simulations for the proposed EACDM, including parameter
-   recovery, BIC-based latent-dimension selection, and convergence diagnostics.
-2. `compare_to_conventional_cdm/`: the additional simulation comparing EACDM
-   with a conventional CDM that ignores the directed dependence between the two
-   latent-attribute blocks.
+## Revised algorithm
 
-The package is intended to be GitHub-friendly.  It includes all scripts needed
-to regenerate the datasets, fit the models, aggregate the results, and reproduce
-the figures/tables used in the paper and supplement.  Large MCMC chain files and
-replicate-level fit objects are intentionally excluded by `.gitignore`; they are
-created by the run scripts.
+The current implementation differs from the original public code in four
+important ways:
 
-## Software Requirements
+- The Q-matrix enters the ordinal response likelihood through
+  `Delta = Q * beta` (elementwise multiplication).
+- An inactive entry, `q[j,k] = 0`, fixes `Delta[j,k]` to zero exactly; no
+  inactive auxiliary loading is sampled.
+- Q is updated by a collapsed exact-Q step, followed by a positive
+  half-normal loading draw for each active entry.
+- The exogenous-profile probabilities `pi2` are sampled and their contribution
+  is included in the complete-data likelihood and BIC. The BIC penalty includes
+  `2^K2 - 1` free `pi2` probabilities.
 
-The code was written for R and uses Rcpp/RcppArmadillo for the MCMC samplers.
-The plotting and aggregation scripts use base R unless otherwise noted.
+Accordingly, measurement recovery is summarized by `RMSE(Delta)` rather than
+RMSE of an unrestricted loading matrix.
 
-Required R packages:
+## Repository layout
+
+```text
+simulation/
+  parameter_recovery/         # 18 scenarios x 100 replicates
+  convergence_diagnostics/    # four-chain running/split-Rhat diagnostics
+  bic_model_selection/        # candidate (K1,K2) selection
+compare_to_conventional_cdm/  # exact-Q EACDM versus the fixed original baseline
+figures/                      # lightweight paper/supplement figures
+```
+
+Each experiment is self-contained and has its own tested copy of the sampler.
+This avoids hidden dependencies between server jobs and lets any experiment be
+uploaded and run independently.
+
+## Software
+
+The scripts require R, a C++ compiler, and:
 
 ```r
 install.packages(c("Rcpp", "RcppArmadillo"))
 ```
 
-Some optional plotting helpers in older scripts may use `ggplot2`, `reshape2`,
-or `gridExtra`, but the main reproducibility scripts are designed to run without
-them.
+The run scripts automatically use Slurm when `sbatch` is available and use a
+parallel single-server runner otherwise. If necessary, edit the R module line
+in the relevant `slurm/*.sbatch` files.
 
-The `slurm/` directories contain cluster submission scripts used for the paper.
-If your cluster uses a different R module, edit the `ml R/...` line in the
-corresponding `.sbatch` files.
+## Reproducing the studies
 
-## Directory Map
+Generated datasets, MCMC chains, replicate-level fits, and logs are not stored
+in Git. On a fresh clone, each `run_all.sh` generates any missing data from the
+fixed seeds, validates the data and sampler, and then starts or resumes the
+analysis.
 
-```text
-eacdm_simulation_github/
-  src/                         # Shared EACDM and conventional CDM model code
-  simulation/
-    parameter_recovery/        # Table-style parameter recovery simulation
-    bic_model_selection/       # BIC selection of K1 and K2 for EACDM
-    convergence_diagnostics/   # Four-chain convergence diagnostics and Rhat figures
-  compare_to_conventional_cdm/ # EACDM vs conventional CDM comparison
-  figures/                     # PNG figures used in the supplement
-```
+### 1. Parameter recovery
 
-## Part 1: EACDM Simulations
-
-### Parameter Recovery
-
-Folder:
-
-```text
-simulation/parameter_recovery/
-```
-
-This reproduces the main parameter-recovery simulation over the 18 scenarios
-formed by:
-
-- `n = 500, 1000, 2000`
-- total `J = 48, 72`
-- `K1 = K2 = 2, 3, 4`
-
-Typical server workflow:
+The design crosses `n = 500, 1000, 2000`, total `J = 48, 72`, and
+`K1 = K2 = 2, 3, 4`, with 100 replicates per scenario.
 
 ```bash
 cd simulation/parameter_recovery
-bash run_all.sh
+N_WORKERS=30 bash run_all.sh
 ```
 
-The main scripts are:
+Key summaries are written to `result/summary/`, including the LaTeX table and
+replicate-level ARI, `RMSE(Delta)`, and `RMSE(eta)` metrics.
 
-- `data/generate_simulation_data.R`: generate simulation datasets.
-- `code/run_one_replicate.R`: fit one replicate.
-- `code/aggregate_table1.R`: aggregate RMSE/ARI summaries.
+### 2. Convergence diagnostics
 
-The EACDM sampler is shared across all experiments and is loaded from
-`../../src/eacdm_model.R`.
-
-### BIC Model Selection
-
-Folder:
-
-```text
-simulation/bic_model_selection/
-```
-
-This reproduces the BIC-based selection of `(K1, K2)` for the proposed EACDM.
-
-Typical server workflow:
-
-```bash
-cd simulation/bic_model_selection
-bash run_all_bic.sh
-```
-
-The main scripts are:
-
-- `code/run_bic_one_fit.R`: fit one candidate `(K1, K2)` model.
-- `code/aggregate_bic_selection.R`: summarize selected dimensions.
-
-The candidate-model fits use the shared EACDM implementation in
-`../../src/eacdm_model.R`.
-
-### Simulation Convergence Diagnostics
-
-Folder:
-
-```text
-simulation/convergence_diagnostics/
-```
-
-This reproduces the supplementary convergence diagnostics for the same 18
-simulation scenarios.  For each scenario, replicates 1, 50, and 100 are used,
-with four independent chains per selected replicate.
-
-Typical server workflow:
+Four chains are fitted to replicates 1, 50, and 100 in every parameter-recovery
+scenario (216 chains total).
 
 ```bash
 cd simulation/convergence_diagnostics
-bash run_all.sh
+N_WORKERS=30 bash run_all.sh
 ```
 
-The main scripts are:
+The diagnostics and running-Rhat figures are written to `output/diagnostics/`
+and `output/running_rhat/`.
 
-- `data/generate_diagnostic_data.R`: regenerate the selected diagnostic datasets.
-- `code/run_chain.R`: run one chain.
-- `code/diagnose_chains.R`: compute elementwise convergence summaries.
-- `code/plot_running_rhat.R`: generate the running Gelman--Rubin figures used
-  in the supplement.
+### 3. Latent-dimension selection
 
-The four-chain fits use the same shared EACDM implementation in
-`../../src/eacdm_model.R`.
+For each simulated dataset, all 25 candidates in
+`K1,K2 in {1,2,3,4,5}` are fitted. The full design contains 600 datasets and
+15,000 candidate fits.
 
-The included lightweight outputs are:
-
-```text
-simulation/convergence_diagnostics/output/diagnostics/*.csv
-simulation/convergence_diagnostics/output/running_rhat/*.png
+```bash
+cd simulation/bic_model_selection
+N_WORKERS=30 bash run_all.sh
 ```
 
-These correspond to the convergence results and figures in the Supplementary
-Material.  The full chain files are excluded because they are large and can be
-regenerated by the Slurm scripts.
+The lightweight `result/j72_only/` folder contains the manuscript analysis for
+`n = 1000` and total `J = 72`. Run
+`Rscript code/aggregate_j72_only.R` after a complete rerun to regenerate it.
 
-## Part 2: Comparison With a Conventional CDM
+### 4. Comparison with a conventional CDM
 
-Folder:
-
-```text
-compare_to_conventional_cdm/
-```
-
-This reproduces the additional simulation comparing the proposed EACDM with a
-conventional CDM.  The data-generating mechanism has `n = 1000`,
-`J1 = J2 = 24`, and `K1 = K2 = 3`.  The first two pairs of cross-block
-attributes are strongly associated, and the third pair is weakly associated.
-
-Typical server workflow:
+This experiment reruns only the 900 revised EACDM candidate fits. The 500
+conventional-CDM fit files in `baseline/conventional/` are the unchanged
+original benchmark and are intentionally included in the repository.
 
 ```bash
 cd compare_to_conventional_cdm
-sbatch slurm/generate_data.sbatch
-sbatch slurm/run_eacdm_bic_array.sbatch
-sbatch slurm/run_conventional_cdm_bic_array.sbatch
-sbatch slurm/aggregate_and_plot.sbatch
+N_WORKERS=30 bash run_all.sh
 ```
 
-The main scripts are:
+Selection summaries, LaTeX output, and modal-Q inclusion-frequency figures are
+written to `result/summary/` and `result/plots/`.
 
-- `data/generate_simulation_data.R`: generate the 100 datasets and true
-  matrices.
-- `code/run_eacdm_bic.R`: fit EACDM candidate models.
-- `code/run_conventional_cdm_bic.R`: fit conventional CDM candidate models.
-- `code/aggregate_and_plot.R`: aggregate BIC results.
-- `code/summarize_modal_k_q.R`: produce the modal selected-dimension summaries
-  and blockwise Q-matrix figures used in the supplement.
+## Resuming and resource control
 
-The EACDM and conventional CDM samplers are shared from `../src/`.
+Valid completed result files are skipped, so rerunning the same command resumes
+an interrupted job. Use `N_WORKERS` to control single-server parallelism and
+`MAX_CONCURRENT` to control Slurm array concurrency. The experiment READMEs
+contain progress, audit, stop, and missing-task commands.
 
-Included lightweight outputs:
+## Included lightweight results
 
-```text
-compare_to_conventional_cdm/result/modal_k_summary/*.csv
-compare_to_conventional_cdm/result/modal_k_summary/*blockwise_Q.png
-```
+The repository retains CSV/TeX summaries and final figures but excludes large
+regenerable objects. The included results correspond to the revised exact-Q
+algorithm:
 
-These reproduce the model-selection counts and the blockwise Q-matrix figures
-reported in the Supplementary Material.
+- parameter recovery: all 18 scenarios and 1,800 replicates;
+- convergence diagnostics: 216 chains across 54 datasets;
+- dimension selection at `n = 1000, J = 72`: `(K,K)` selected in all 100
+  replicates for each true `K = 2, 3, 4`;
+- model comparison: EACDM selected `(3,3)` in all 100 replicates, while the
+  fixed conventional-CDM baseline selected `K = 4, 5, 6` in 65, 33, and 2
+  replicates, respectively.
 
-## Figures Used in the Supplement
-
-The `figures/` directory contains PNG copies of the final supplement figures:
-
-```text
-simulation_running_rhat_K2.png
-simulation_running_rhat_K3.png
-simulation_running_rhat_K4.png
-simulation_EACDM_blockwise_Q.png
-simulation_conventional_CDM_blockwise_Q.png
-```
-
-These figures are regenerated by:
-
-- `simulation/convergence_diagnostics/code/plot_running_rhat.R`
-- `compare_to_conventional_cdm/code/summarize_modal_k_q.R`
-
-## Notes on Large Files
-
-The following outputs are intentionally not tracked:
-
-- MCMC chain files (`*.rds`, `*.RData`)
-- replicate-level fit objects
-- scheduler logs
-- temporary PDFs and plotting scratch files
-
-They are reproducible from the scripts and Slurm workflows above.
+See each experiment's `ALGORITHM_NOTES.md` and `README.md` for the exact
+formula-to-code mapping and server workflow.

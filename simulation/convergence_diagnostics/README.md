@@ -1,137 +1,41 @@
-# EACDM Simulation Convergence Diagnostics
+# Exact-Q convergence diagnostics
 
-This server package evaluates MCMC convergence for the Section 4 simulation study using multiple independent chains, rank-normalized split-Rhat, and trace plots.
+This is a standalone rerun of the paper's convergence-diagnostic design using the revised exact-Q sampler. It does not modify or source the old simulation repository.
 
-## Diagnostic Design
+## Design
 
-The study covers all 18 simulation scenarios:
+- 18 parameter-recovery scenarios: `n = 500, 1000, 2000`; `J1 = J2 = 24, 36`; `K1 = K2 = 2, 3, 4`.
+- Prespecified replicates 1, 50, and 100 from each scenario.
+- Four independent chains per dataset: 54 datasets x 4 = 216 chain jobs.
+- 3,000 MCMC iterations with 2,000 burn-in iterations.
+- All items have `M_j = 3`, encoded as `0, 1, 2`.
+- Each chain is aligned to the true Q-matrix separately within the two blocks before diagnostics.
+- Final diagnostics use rank-normalized split-Rhat with folded Rhat for `eta`, `Delta1`, `Delta2`, `Q1`, and `Q2`.
+- The original running classic-Rhat figure design and the selected traceplot scenarios (13, 11, 6; replicate 50) are retained.
 
-- `n = 500, 1000, 2000`
-- `J1 = J2 = 24, 36`
-- `K1 = K2 = 2, 3, 4`
+The 54 datasets are not stored in Git. On a fresh clone, `run_all.sh` calls
+`data/generate_diagnostic_data.R` and reproduces the same response values from
+the fixed deterministic seeds before validating them.
 
-For each scenario, replicates `1`, `50`, and `100` are selected in advance. Four independent chains are run for each selected dataset:
-
-```text
-18 scenarios * 3 replicates * 4 chains = 216 array tasks
-```
-
-Each chain uses the same MCMC length reported in the paper:
-
-```text
-iteration = 3000
-burn-in = 2000
-post-burn-in draws = 1000
-```
-
-The selected datasets reproduce the original parameter-recovery simulation exactly because the generator uses the same data seed and replicate-specific seed formula.
-
-## Diagnostics
-
-Before computing diagnostics, each chain is aligned to the true simulation labels using the posterior mean Q-matrices. The resulting fixed attribute permutations are applied consistently to:
-
-- `Q1` and `B1`
-- `Q2` and `B2`
-- rows and columns of the structural coefficient matrix `eta`
-
-The diagnostic script computes rank-normalized split-Rhat, including the folded-Rhat check, for every element of:
-
-- `eta`
-- `B1`
-- `B2`
-- `Q1`
-- `Q2`
-
-It reports parameter-level results and summaries by replicate, scenario, and parameter block.
-
-## Trace Plots
-
-Trace plots are generated for replicate 50 in three scenarios selected before examining the diagnostics:
-
-- Difficult: scenario 13, `n = 500`, total `J = 48`, `K = 4`
-- Intermediate: scenario 11, `n = 1000`, total `J = 72`, `K = 3`
-- Easier: scenario 6, `n = 2000`, total `J = 72`, `K = 2`
-
-For each scenario, the package produces:
-
-- continuous-parameter trace plots for selected `eta`, `B1`, and `B2` elements;
-- binary Q-element trace plots;
-- running posterior means for the selected Q-elements.
-
-The trace-plot choices are based on the true active/inactive structure and are not selected after examining convergence.
-
-## Folder Layout
-
-```text
-eacdm_simulation_github/simulation/convergence_diagnostics/
-  ../../src/
-    eacdm_model.R
-    eacdm_mcmc.cpp
-  code/
-    run_chain.R
-    diagnose_chains.R
-  data/
-    generate_diagnostic_data.R
-    generated/                  # created on the server
-  slurm/
-    generate_data.sbatch
-    run_chains_array.sbatch
-    diagnose_chains.sbatch
-  output/                       # created on the server
-  run_all.sh
-```
-
-The chain runner loads the shared EACDM implementation from `../../src/`.
-
-## Run
-
-Upload the complete folder, enter it on the server, and run:
+## Single server (32 cores / 64 GB)
 
 ```bash
 cd simulation/convergence_diagnostics
-bash run_all.sh
+nohup env N_WORKERS=30 bash run_all.sh > log/local_master.log 2>&1 &
+tail -f log/local_master.log
 ```
 
-The wrapper submits data generation, then the 216-task chain array, and finally the dependent diagnostic job. The diagnostic job uses an `afterany` dependency so that it still produces `missing_chains.csv` if an individual chain fails. Complete four-chain datasets are diagnosed, while incomplete datasets are listed with their array task IDs for rerunning.
-
-To inspect progress:
+The threaded numerical-library variables are forced to one thread per worker. Valid completed chains are skipped, so the same command resumes safely. To rerun only missing/invalid tasks:
 
 ```bash
-squeue -u "$USER"
+nohup env N_WORKERS=30 bash rerun_missing.sh > log/rerun_missing.log 2>&1 &
 ```
 
-If `output/diagnostics/missing_chains.csv` lists failed tasks, rerun the indicated task IDs and then resubmit the diagnostic job:
+Monitor completion:
 
 ```bash
-sbatch --array=TASK_ID slurm/run_chains_array.sbatch
-sbatch slurm/diagnose_chains.sbatch
+watch -n 10 "find output/chains -name 'chain_*.rds' | wc -l"
+Rscript code/audit_chains.R 3000 2000
 ```
 
-## Reproducibility
-
-Default seeds are:
-
-- Data base seed: `20260517`
-- Chain base seed: `20260610`
-- Chain seed:
-
-```text
-20260610 + scenario_id * 100000 + replicate_id * 100 + chain_id
-```
-
-All Slurm jobs send `END` and `FAIL` notifications to `zhuang@fredhutch.org`.
-
-## Main Outputs
-
-```text
-output/diagnostics/parameter_rhat.csv
-output/diagnostics/replicate_block_summary.csv
-output/diagnostics/scenario_block_summary.csv
-output/diagnostics/overall_block_summary.csv
-output/diagnostics/missing_chains.csv
-output/diagnostics/convergence_diagnostics.rds
-output/traceplots/*.pdf
-output/traceplots/traceplot_manifest.csv
-```
-
-The most useful supplementary table is `scenario_block_summary.csv`. The trace-plot PDFs can be included directly in the Supplementary Material.
+Final files are under `output/diagnostics`, `output/traceplots`, and `output/running_rhat`.

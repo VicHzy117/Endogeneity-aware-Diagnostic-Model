@@ -29,6 +29,7 @@ project_dir <- normalizePath(file.path(script_dir(), ".."), mustWork = TRUE)
 setwd(project_dir)
 
 result_dir <- arg_value(args, "result_dir", "result")
+allow_incomplete <- tolower(arg_value(args, "allow_incomplete", "false")) == "true"
 summary_dir <- file.path(result_dir, "summary")
 dir.create(summary_dir, recursive = TRUE, showWarnings = FALSE)
 
@@ -40,6 +41,16 @@ rows <- do.call(rbind, lapply(files, function(path) {
   x <- readRDS(path)
   cbind(x$metrics, path = path)
 }))
+expected_n <- 18L * 100L
+if (!allow_incomplete && nrow(rows) != expected_n) {
+  stop("Expected ", expected_n, " fit files but found ", nrow(rows),
+       ". Run code/audit_results.R and rerun missing tasks, or pass ",
+       "--allow_incomplete=true for an explicitly provisional summary.")
+}
+if (anyDuplicated(rows[c("scenario_id", "replicate_id")])) {
+  stop("Duplicate scenario/replicate results detected")
+}
+if (any(!rows$exact_Q_invariant)) stop("At least one fit violated the exact-Q invariant")
 write.csv(rows, file.path(summary_dir, "all_replicate_metrics.csv"), row.names = FALSE)
 
 split_key <- interaction(rows$n, rows$J, rows$K1, rows$K2, drop = TRUE)
@@ -52,10 +63,12 @@ table1 <- do.call(rbind, lapply(split(rows, split_key), function(df) {
     n_replicates = nrow(df),
     ARI_Q_median = median(df$ARI_Q, na.rm = TRUE),
     ARI_Q_IQR = iqr(df$ARI_Q),
-    RMSE_B_median = median(df$RMSE_B, na.rm = TRUE),
-    RMSE_B_IQR = iqr(df$RMSE_B),
+    RMSE_Delta_median = median(df$RMSE_Delta, na.rm = TRUE),
+    RMSE_Delta_IQR = iqr(df$RMSE_Delta),
     RMSE_eta_median = median(df$RMSE_eta, na.rm = TRUE),
     RMSE_eta_IQR = iqr(df$RMSE_eta),
+    BIC_mod_median = median(df$BIC_mod, na.rm = TRUE),
+    exact_Q_failures = sum(!df$exact_Q_invariant),
     elapsed_min_median = median(df$elapsed_min, na.rm = TRUE)
   )
 }))
@@ -71,7 +84,9 @@ table1_md <- data.frame(
   K1 = table1$K1,
   K2 = table1$K2,
   `ARI(Q) median (IQR)` = format_metric(table1$ARI_Q_median, table1$ARI_Q_IQR),
-  `RMSE(B) median (IQR)` = format_metric(table1$RMSE_B_median, table1$RMSE_B_IQR),
+  `RMSE(Delta) median (IQR)` = format_metric(
+    table1$RMSE_Delta_median, table1$RMSE_Delta_IQR
+  ),
   `RMSE(eta) median (IQR)` = format_metric(table1$RMSE_eta_median, table1$RMSE_eta_IQR),
   check.names = FALSE
 )
@@ -79,7 +94,7 @@ table1_md <- data.frame(
 md_path <- file.path(summary_dir, "table1_extended.md")
 con <- file(md_path, open = "wt")
 on.exit(close(con), add = TRUE)
-writeLines("| n | J | K1 | K2 | ARI(Q) median (IQR) | RMSE(B) median (IQR) | RMSE(eta) median (IQR) |", con)
+writeLines("| n | J | K1 | K2 | ARI(Q) median (IQR) | RMSE(Delta) median (IQR) | RMSE(eta) median (IQR) |", con)
 writeLines("|---:|---:|---:|---:|---:|---:|---:|", con)
 for (i in seq_len(nrow(table1_md))) {
   writeLines(sprintf("| %d | %d | %d | %d | %s | %s | %s |",

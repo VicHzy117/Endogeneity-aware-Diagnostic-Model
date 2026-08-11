@@ -70,10 +70,20 @@ rmse <- function(est, truth) {
 args <- parse_args()
 code_dir <- script_dir()
 project_dir <- normalizePath(file.path(code_dir, ".."), mustWork = TRUE)
+launch_dir <- getwd()
+resolve_path <- function(path, default_under_project) {
+  if (grepl("^/", path)) return(path)
+  launch_candidate <- file.path(launch_dir, path)
+  if (file.exists(launch_candidate) || dir.exists(dirname(launch_candidate))) {
+    return(normalizePath(launch_candidate, mustWork = FALSE))
+  }
+  file.path(project_dir, default_under_project)
+}
+data_arg <- arg_value(args, "data_dir", file.path("data", "generated"))
+result_arg <- arg_value(args, "result_dir", "result")
+data_dir <- resolve_path(data_arg, data_arg)
+result_dir <- resolve_path(result_arg, result_arg)
 setwd(project_dir)
-
-data_dir <- arg_value(args, "data_dir", file.path("data", "generated"))
-result_dir <- arg_value(args, "result_dir", "result")
 iteration <- as.integer(arg_value(args, "iteration", 3000L))
 burnin <- as.integer(arg_value(args, "burnin", 2000L))
 seed <- as.integer(arg_value(args, "seed", 910000L))
@@ -92,11 +102,25 @@ out_dir <- file.path(result_dir, "fits",
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 out_path <- file.path(out_dir, sprintf("replicate_%03d.rds", job$replicate_id))
 if (file.exists(out_path) && tolower(arg_value(args, "overwrite", "FALSE")) != "true") {
-  cat("Result exists, skipping:", out_path, "\n")
-  quit(save = "no", status = 0L)
+  existing_ok <- tryCatch({
+    existing <- readRDS(out_path)
+    isTRUE(existing$metrics$exact_Q_invariant) &&
+      identical(as.integer(existing$fit_config$iteration), iteration) &&
+      identical(as.integer(existing$fit_config$burnin), burnin) &&
+      all(is.finite(unlist(existing$metrics[c(
+        "ARI_Q", "RMSE_Delta", "RMSE_eta", "BIC_mod"
+      )])))
+  }, error = function(e) FALSE)
+  if (existing_ok) {
+    cat("Valid result exists, skipping:", out_path, "\n")
+    quit(save = "no", status = 0L)
+  }
+  quarantine <- paste0(out_path, ".invalid_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+  if (!file.rename(out_path, quarantine)) stop("Could not quarantine invalid result: ", out_path)
+  cat("Moved invalid/incompatible result to", quarantine, "\n")
 }
 
-source(file.path("..", "..", "src", "eacdm_model.R"))
+source(file.path("code", "new_model_main.R"))
 sim <- readRDS(file.path(data_dir, job$file))
 dat <- sim$datasets[[job$replicate_id]]
 truth <- sim$truth
@@ -116,21 +140,30 @@ fit <- ECDM_main(
 )
 elapsed_min <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
 
-q1_mean <- PostMean(fit$Q1_list, burnin + 1L)
-q2_mean <- PostMean(fit$Q2_list, burnin + 1L)
-b_mean <- PostMean(fit$B_list, burnin + 1L)
-l_mean <- PostMean(fit$L_list, burnin + 1L)
-eta_mean <- PostMean(fit$Sita_list, burnin + 1L)
+q1_mean <- PostMean(fit$Q1_list, burnin)
+q2_mean <- PostMean(fit$Q2_list, burnin)
+delta1_mean <- PostMean(fit$B_list, burnin)
+delta2_mean <- PostMean(fit$L_list, burnin)
+eta_mean <- PostMean(fit$Sita_list, burnin)
+pi2_mean <- PostMean(fit$pi2_list, burnin)
 
 align1 <- align_block(q1_mean, truth$Q1)
 align2 <- align_block(q2_mean, truth$Q2)
 q_full_true <- blockdiag_q(truth$Q1, truth$Q2)
 q_full_est <- blockdiag_q(align1$Q_binary, align2$Q_binary)
 
-b_aligned <- cbind(b_mean[, 1L], b_mean[, 1L + align1$permutation, drop = FALSE])
-l_aligned <- cbind(l_mean[, 1L], l_mean[, 1L + align2$permutation, drop = FALSE])
+delta1_aligned <- delta1_mean[, 1L + align1$permutation, drop = FALSE]
+delta2_aligned <- delta2_mean[, 1L + align2$permutation, drop = FALSE]
 eta_aligned <- eta_mean[c(1L, 1L + align2$permutation, nrow(eta_mean)),
                         align1$permutation, drop = FALSE]
+pbic <- PBIC_from_result(fit, dat$Y, dat$V, dat$covariates, job$K, job$K, burnin)
+
+# This invariant is the defining difference from the former SSVS code.
+exact_q_ok <- all(vapply(seq_along(fit$B_list), function(i) {
+  all(fit$B_list[[i]][, -1L][fit$Q1_list[[i]] == 0] == 0)
+}, logical(1L))) && all(vapply(seq_along(fit$L_list), function(i) {
+  all(fit$L_list[[i]][, -1L][fit$Q2_list[[i]] == 0] == 0)
+}, logical(1L)))
 
 metrics <- data.frame(
   scenario_id = job$scenario_id,
@@ -141,8 +174,17 @@ metrics <- data.frame(
   K1 = job$K,
   K2 = job$K,
   ARI_Q = adjusted_rand_index(q_row_labels(q_full_true), q_row_labels(q_full_est)),
-  RMSE_B = sqrt(mean(c((b_aligned - truth$B)^2, (l_aligned - truth$L)^2))),
+  RMSE_Delta = sqrt(mean(c(
+    (delta1_aligned - truth$B[, -1L, drop = FALSE])^2,
+    (delta2_aligned - truth$L[, -1L, drop = FALSE])^2
+  ))),
+  RMSE_beta0 = sqrt(mean(c(
+    (delta1_mean[, 1L] - truth$B[, 1L])^2,
+    (delta2_mean[, 1L] - truth$L[, 1L])^2
+  ))),
   RMSE_eta = rmse(eta_aligned, truth$eta),
+  BIC_mod = pbic,
+  exact_Q_invariant = exact_q_ok,
   elapsed_min = elapsed_min,
   seed = fit_seed
 )
@@ -152,13 +194,22 @@ out <- list(
   posterior = list(
     Q1_mean = q1_mean,
     Q2_mean = q2_mean,
-    B_mean = b_mean,
-    L_mean = l_mean,
+    beta01_mean = delta1_mean[, 1L],
+    beta02_mean = delta2_mean[, 1L],
+    Delta1_mean = delta1_mean[, -1L, drop = FALSE],
+    Delta2_mean = delta2_mean[, -1L, drop = FALSE],
     eta_mean = eta_mean,
+    pi2_mean = pi2_mean,
     Q1_binary_aligned = align1$Q_binary,
     Q2_binary_aligned = align2$Q_binary,
     Q1_permutation = align1$permutation,
     Q2_permutation = align2$permutation
+  ),
+  fit_config = list(
+    iteration = iteration,
+    burnin = burnin,
+    likelihood = "exact Q restriction",
+    bic_includes_pi2 = TRUE
   )
 )
 saveRDS(out, out_path)

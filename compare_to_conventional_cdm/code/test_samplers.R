@@ -1,0 +1,11 @@
+source(file.path("code", "new_model_main.R"))
+set.seed(260806)
+n <- 30L
+Y <- matrix(sample(0:2, n * 6L, replace = TRUE), nrow = n)
+V <- matrix(sample(0:2, n * 6L, replace = TRUE), nrow = n)
+Z <- matrix(numeric(0), nrow = n, ncol = 0L)
+fit <- ECDM_main(Y, V, Z, 2L, 2L, iteration = 6L, verbose_every = 0L)
+stopifnot(all(is.finite(fit$log_lik_complete)), length(fit$pi2_list) == 7L)
+stopifnot(all(vapply(seq_along(fit$B_list), function(i)
+  all(fit$B_list[[i]][, -1L][fit$Q1_list[[i]] == 0L] == 0), logical(1L))))
+cat("Revised exact-Q EACDM sampler test passed.\n")

@@ -56,11 +56,28 @@ dir.create(chain_dir, recursive = TRUE, showWarnings = FALSE)
 out_path <- file.path(chain_dir, sprintf("chain_%d.rds", job$chain_id))
 
 if (file.exists(out_path) && !overwrite) {
-  cat("Result exists, skipping:", out_path, "\n")
-  quit(save = "no", status = 0L)
+  existing_ok <- tryCatch({
+    old <- readRDS(out_path)
+    identical(as.integer(old$metadata$iteration), iteration) &&
+      identical(as.integer(old$metadata$burnin), burnin) &&
+      identical(as.integer(old$metadata$chain_id), as.integer(job$chain_id)) &&
+      length(old$fit$Q1_list) == iteration + 1L &&
+      length(old$fit$Q2_list) == iteration + 1L &&
+      length(old$fit$B_list) == iteration + 1L &&
+      length(old$fit$L_list) == iteration + 1L &&
+      length(old$fit$Sita_list) == iteration + 1L &&
+      identical(old$fit$sampler$likelihood, "exact Q restriction")
+  }, error = function(e) FALSE)
+  if (existing_ok) {
+    cat("Valid result exists, skipping:", out_path, "\n")
+    quit(save = "no", status = 0L)
+  }
+  quarantine <- paste0(out_path, ".invalid_", format(Sys.time(), "%Y%m%d_%H%M%S"))
+  if (!file.rename(out_path, quarantine)) stop("Could not quarantine invalid result: ", out_path)
+  cat("Moved invalid result to", quarantine, "\n")
 }
 
-source(file.path("..", "..", "src", "eacdm_model.R"))
+source(file.path("code", "new_model_main.R"))
 dat <- readRDS(file.path(data_dir, job$file))
 
 cat(
@@ -86,9 +103,17 @@ fit <- ECDM_main(
   iteration = iteration,
   verbose_every = 500L,
   keep_categories = FALSE,
-  keep_loglik = FALSE
+  keep_loglik = FALSE,
+  keep_pi2 = FALSE
 )
 elapsed_min <- as.numeric(difftime(Sys.time(), start_time, units = "mins"))
+
+exact_q_ok <- all(vapply(seq_along(fit$B_list), function(i) {
+  all(fit$B_list[[i]][, -1L][fit$Q1_list[[i]] == 0L] == 0)
+}, logical(1L))) && all(vapply(seq_along(fit$L_list), function(i) {
+  all(fit$L_list[[i]][, -1L][fit$Q2_list[[i]] == 0L] == 0)
+}, logical(1L)))
+if (!exact_q_ok) stop("Exact-Q invariant failed; refusing to save chain.")
 
 out <- list(
   metadata = list(
@@ -106,11 +131,15 @@ out <- list(
     seed = chain_seed,
     data_seed = dat$dataset_seed,
     data_file = job$file,
-    elapsed_min = elapsed_min
+    elapsed_min = elapsed_min,
+    exact_Q_invariant = exact_q_ok,
+    sampler = "exact-Q partially collapsed Gibbs"
   ),
   truth = dat$truth,
   fit = fit
 )
 
-saveRDS(out, out_path, compress = "xz")
+tmp_path <- paste0(out_path, ".tmp_", Sys.getpid())
+saveRDS(out, tmp_path, compress = "gzip")
+if (!file.rename(tmp_path, out_path)) stop("Could not atomically move result to ", out_path)
 cat("Saved", out_path, "elapsed_min", elapsed_min, "\n")

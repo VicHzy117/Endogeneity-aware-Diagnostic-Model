@@ -1,5 +1,6 @@
 # macOS
 .DS_Store
+._*
 
 # R session / history
 .Rhistory
@@ -11,6 +12,10 @@
 *.RData
 *.RDataTmp
 
+# The conventional-CDM benchmark is intentionally versioned.  It is the
+# unchanged baseline from the original comparison and is not regenerated.
+!compare_to_conventional_cdm/baseline/conventional/*.rds
+
 # Logs
 log/
 logs/
@@ -20,11 +25,12 @@ slurm-*.out
 *.err
 
 # Generated large result folders
+**/data/generated/
 **/result/fits/
 **/result/bic_fits/
 **/result/eacdm/
-**/result/conventional_cdm/
 **/output/chains/
+**/tmp/
 
 # Keep placeholders if present
 !**/.gitkeep

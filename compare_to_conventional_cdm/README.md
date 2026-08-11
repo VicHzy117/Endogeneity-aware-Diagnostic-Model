@@ -1,142 +1,50 @@
-# Server Simulation Model Comparison
+# Exact-Q EACDM versus conventional CDM
 
-This folder is a self-contained server package for comparing the old CDM model
-and the new EACDM model by BIC on simulated data.
+This standalone package reruns only the proposed EACDM part of Section 4.3 using the revised exact-Q algorithm. The original conventional-CDM results are bundled unchanged as the fixed paper baseline and are not rerun.
 
-## Simulation Design
+## Original design retained
 
-- Number of datasets: 100
-- Subjects per dataset: 1000
-- True latent dimensions: `K1 = K2 = 3`
-- Items: `J1 = J2 = 24`
-- Response levels: 3 ordinal categories, saved as `0, 1, 2`
-- True Q matrices: 24-item repeat of the K = 3 setting
-- Structure equation from Section 4.3.1:
+- 100 datasets; `n = 1000`; `J1 = J2 = 24`; true `K1 = K2 = 3`.
+- Every item has `M_j = 3`, with categories encoded `0, 1, 2`.
+- No observed covariates.
+- The first two cross-block attribute pairs have probabilities about 0.10/0.90; the third has about 0.40/0.60.
+- Data seed 237 and the original replicate-specific seed formula are retained.
+- EACDM candidates: `(K1,K2)` in `{2,3,4} x {2,3,4}` (900 fits).
+- Conventional candidates: `K` in `{2,3,4,5,6}` (the original 500 completed fits are included under `baseline/conventional`).
+- 3,000 iterations and 2,000 burn-in iterations for every fit.
 
-```r
-logit Pr(alpha_ik^(1) = 1) = gamma_k^T alpha_i^(2)
-```
+## What is rerun
 
-Here `alpha_i^(2)` includes the intercept column. For `K1 = K2 = 3`, this
-simulation uses a one-to-one dependency structure:
+Only the 900 EACDM candidate fits are rerun. EACDM uses the new partially collapsed exact-Q sampler, and its complete likelihood/BIC now includes `pi2`. The 500 conventional-CDM fits retain the original implementation, BIC, Q estimates, and seeds so that the conventional side of the published comparison is unchanged.
 
-- `alpha1_1` depends on `alpha2_1`
-- `alpha1_2` depends on `alpha2_2`
-- `alpha1_3` depends on `alpha2_3`
+For the revised EACDM fits, posterior-averaged complete-data BIC counts:
 
-```r
-gamma <- matrix(c(
-  -2.20, -2.20, -0.40,
-   4.40,  0.00,  0.00,
-   0.00,  4.40,  0.00,
-   0.00,  0.00,  0.80
-), nrow = 4, ncol = 3, byrow = TRUE)
-```
+- one item intercept per item;
+- an inclusion indicator and active magnitude for every active Q entry;
+- `2^K2-1` free `pi2` probabilities;
+- EACDM structural coefficients.
 
-For `alpha1_1` and `alpha1_2`, the probability is approximately 0.10 when the
-corresponding `alpha2` attribute is 0 and 0.90 when it is 1. For `alpha1_3`,
-the corresponding probabilities are approximately 0.40 and 0.60.
+The original conventional outputs are used only as the previously reported benchmark, rather than being silently refitted under a different algorithm.
 
-The data generator sets `set.seed(seed + dataset_id - 1)` for each replicate.
-The default data seed is `237`, so rerunning the generator with the same
-arguments reproduces the same 100 datasets. The model runners also set a
-deterministic seed for each array task:
-
-- conventional CDM: `seed + dataset_id * 100 + K`, with default runner seed `1000`
-- EACDM: `seed + dataset_id * 100 + K1 * 10 + K2`, with default runner seed `2000`
-
-No covariates are used in this simulation setting.
-
-## Folder Layout
-
-```text
-eacdm_simulation_github/compare_to_conventional_cdm/
-  ../src/
-    eacdm_model.R
-    eacdm_mcmc.cpp
-    regular_cdm_model.R
-    regular_cdm_mcmc.cpp
-  data/
-    generate_simulation_data.R
-    simulation_data.rds
-    simulation_data.RData
-    true_Q_y.csv
-    true_Q_v.csv
-    true_gamma.csv
-    simudata_original.R
-  code/
-    run_conventional_cdm_bic.R
-    run_eacdm_bic.R
-    aggregate_and_plot.R
-  slurm/
-    generate_data.sbatch
-    run_conventional_cdm_bic_array.sbatch
-    run_eacdm_bic_array.sbatch
-    aggregate_and_plot.sbatch
-  log/
-  result/
-```
-
-The runners load the shared model implementations from `../src/`, so model
-changes are made in one place.
-
-## Run On Server
-
-From the project folder:
+## Run on a 32-core / 64-GB server
 
 ```bash
-sbatch slurm/generate_data.sbatch
-sbatch slurm/run_conventional_cdm_bic_array.sbatch
-sbatch slurm/run_eacdm_bic_array.sbatch
+cd compare_to_conventional_cdm
+nohup env N_WORKERS=30 bash run_all.sh > log/local_master.log 2>&1 &
+tail -f log/local_master.log
 ```
 
-After both arrays finish:
+Monitor and audit:
 
 ```bash
-sbatch slurm/aggregate_and_plot.sbatch
+watch -n 10 "find result/eacdm -name '*.rds' | wc -l"
+Rscript code/audit_results.R 3000 2000
 ```
 
-By default:
-
-- conventional CDM tests `K = 2, 3, 4, 5, 6` for each dataset, so the array has `100 * 5 = 500` tasks.
-- EACDM tests `K1 = 2, 3, 4` and `K2 = 2, 3, 4`, so the array has `100 * 9 = 900` tasks.
-- MCMC settings are `iteration = 3000`, `burnin = 2000`.
-
-To override MCMC length at submission time:
+There are 900 new result files. Valid completed fits are skipped. The audit also checks that all 500 bundled conventional baseline files are present. To rerun only missing or invalid EACDM fits:
 
 ```bash
-ITERATION=5000 BURNIN=4000 sbatch slurm/run_conventional_cdm_bic_array.sbatch
-ITERATION=5000 BURNIN=4000 sbatch slurm/run_eacdm_bic_array.sbatch
+nohup env N_WORKERS=30 bash rerun_missing.sh > log/rerun_missing.log 2>&1 &
 ```
 
-## Outputs
-
-Each model fit writes one `.rds` file:
-
-```text
-result/conventional_cdm/dataset_001_K_3.rds
-result/eacdm/dataset_001_K1_3_K2_3.rds
-```
-
-Aggregation writes:
-
-```text
-result/summary/conventional_cdm_all_bic.csv
-result/summary/eacdm_all_bic.csv
-result/summary/conventional_cdm_best_k.csv
-result/summary/eacdm_best_k.csv
-result/summary/conventional_cdm_best_k_counts.csv
-result/summary/eacdm_best_k_counts.csv
-result/summary/model_comparison_summary.rds
-```
-
-Best-model Q plots are written per dataset:
-
-```text
-result/plots/dataset_001_conventional_cdm_best_Q.png
-result/plots/dataset_001_eacdm_best_Q.png
-```
-
-The plots compare true Q against the posterior estimated Q. Estimated columns
-are aligned to the true Q when the selected K matches the true K; otherwise the
-estimated matrix is plotted with its selected number of columns.
+Selection counts, a paper-ready LaTeX table, BIC files, and headline results are written to `result/summary`. Modal-Q inclusion-frequency figures are written to `result/plots`.
